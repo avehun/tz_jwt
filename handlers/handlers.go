@@ -4,53 +4,65 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"log"
-
+	"github.com/gorilla/mux"
 	"github.com/radiance822/tz_jwt/manager"
 	"github.com/radiance822/tz_jwt/models"
 )
 
-var TokenDb map[string]string
+var TokenDb = make(map[string]string) // In production, replace with a proper DB
 
 func GenerateTokenPair(w http.ResponseWriter, r *http.Request) {
-	userid := r.URL.Query().Get("id")
-	accesToken, err := manager.GenerateAccessToken(userid)
+	vars := mux.Vars(r)
+	userid := vars["id"]
+
+	accessToken, err := manager.GenerateAccessToken(userid)
 	if err != nil {
-		log.Printf("error creating accessToken")
+		http.Error(w, "Error creating access token", http.StatusInternalServerError)
+		return
 	}
-	refreshToken, err := manager.GenerateRefhreshToken()
+
+	refreshToken, err := manager.GenerateRefreshToken()
 	if err != nil {
-		log.Printf("error creating refreshToken")
+		http.Error(w, "Error creating refresh token", http.StatusInternalServerError)
+		return
 	}
 
 	TokenDb[userid] = refreshToken
 
 	response := models.TokenPair{
-		AccesToken:   accesToken,
+		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
 	}
-	err = json.NewEncoder(w).Encode(response)
-	if err != nil {
-		log.Printf("unable to encode TokenPair: %s", err)
-	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
+
 func RefreshTokenPair(w http.ResponseWriter, r *http.Request) {
 	var tokens models.TokenPair
-	json.NewDecoder(r.Body).Decode(&tokens)
-	userid, err := manager.Parse(tokens.AccesToken)
+	err := json.NewDecoder(r.Body).Decode(&tokens)
 	if err != nil {
-		log.Fatal("error parsing jwt token")
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
 	}
+
+	userid, err := manager.Parse(tokens.AccessToken)
+	if err != nil {
+		http.Error(w, "Invalid access token", http.StatusUnauthorized)
+		return
+	}
+
 	if TokenDb[userid] != tokens.RefreshToken {
-		log.Fatal("no refresh token in db for this access token")
+		http.Error(w, "Invalid refresh token", http.StatusUnauthorized)
+		return
 	}
+
 	newAccessToken, err := manager.GenerateAccessToken(userid)
 	if err != nil {
-		log.Fatal("error creating new access token")
+		http.Error(w, "Error creating new access token", http.StatusInternalServerError)
+		return
 	}
-	tokens.AccesToken = newAccessToken
-	err = json.NewEncoder(w).Encode(tokens)
-	if err != nil {
-		log.Printf("unable to refresh token: %s", err)
-	}
+	tokens.AccessToken = newAccessToken
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(tokens)
 }
